@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Course project implementing a JEPA-based self-supervised model for 12-lead ECG signals, adapted from [ECG-JEPA (arxiv 2410.08559)](https://arxiv.org/abs/2410.08559). The paper and project proposal are at `/Users/shadyali/TS-JEPA/`. The design rationale for every architectural decision is in `/Users/shadyali/TS-JEPA/design_backlog.md` — read it before making structural changes.
+Course project implementing a JEPA-based self-supervised model for 12-lead ECG signals, adapted from [ECG-JEPA (arxiv 2410.08559)](https://arxiv.org/abs/2410.08559). Keep the paper and project proposal with the repository documentation. The design rationale for every architectural decision is in `design_backlog.md` — read it before making structural changes.
 
 **Current scope:** core architecture only (`src/`). Training loop, dataloaders, EMA, and downstream evaluators do not exist yet and will be added separately.
 
