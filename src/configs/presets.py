@@ -118,3 +118,19 @@ def _check_consistency(
         raise ValueError(
             f"predictor.embed_dim ({predictor.embed_dim}) must be divisible by predictor.num_heads ({predictor.num_heads})"
         )
+    if encoder.embed_dim % 4 != 0:
+        raise ValueError(
+            f"encoder.embed_dim ({encoder.embed_dim}) must be divisible by 4 for 2D sin/cos positional embeddings"
+        )
+    if predictor.embed_dim % 2 != 0:
+        raise ValueError(
+            f"predictor.embed_dim ({predictor.embed_dim}) must be even for 1D sin/cos positional embeddings"
+        )
+    if not 0.0 <= encoder.drop_path < 1.0:
+        raise ValueError(
+            f"encoder.drop_path ({encoder.drop_path}) must be in the range [0, 1)"
+        )
+    if not 0.0 <= predictor.drop_path < 1.0:
+        raise ValueError(
+            f"predictor.drop_path ({predictor.drop_path}) must be in the range [0, 1)"
+        )
