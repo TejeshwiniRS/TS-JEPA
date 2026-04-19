@@ -118,7 +118,7 @@ class ECGPredictor(nn.Module):
         x = x + vis_pos.unsqueeze(0)
 
         # Build mask-token stream: (bs*C, M, D) with masked positional embeddings added.
-        mask_tokens = self.mask_token.expand(bs * c, m, self.embed_dim).clone()
+        mask_tokens = self.mask_token.expand(bs * c, m, self.embed_dim)
         mask_pos = self.pos_embed.index_select(dim=0, index=masked_indices)  # (M, D)
         mask_tokens = mask_tokens + mask_pos.unsqueeze(0)
 
