@@ -42,7 +42,7 @@ class PretrainConfig:
 
     # --- Misc ---
     seed: int = 42
-    use_amp: bool = True  # automatic mixed precision
+    use_amp: bool = True  # BF16 autocast on activations (weights stay FP32)
     device: str = "cuda"
 
     # --- Derived (set at runtime) ---

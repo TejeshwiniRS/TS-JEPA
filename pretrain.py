@@ -30,13 +30,6 @@ warnings.filterwarnings("ignore")
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-try:
-    from torch.amp import GradScaler
-    from torch.amp import autocast as _autocast
-    _new_amp = True
-except ImportError:
-    from torch.cuda.amp import GradScaler, autocast as _autocast  # PyTorch < 2.1
-    _new_amp = False
 
 from src.configs import dev_preset, final_preset
 from src.configs.pretrain_config import PretrainConfig
@@ -47,11 +40,24 @@ from src.masking import get_mask_fn
 from src.data.ptbxl_dataset import get_pretrain_loaders
 
 
-def amp_autocast(device_type: str):
-    """Return the right autocast context for the installed PyTorch version."""
-    if _new_amp:
-        return _autocast(device_type=device_type)
-    return _autocast()
+class _NullCtx:
+    """No-op context manager used when AMP is disabled."""
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        return False
+
+
+def amp_autocast(device: torch.device, use_amp: bool):
+    """BF16 autocast on CUDA, no-op otherwise.
+
+    Weights stay FP32 — only activations are cast to BF16 during the forward
+    pass. BF16 has the same exponent range as FP32, so GradScaler is not
+    needed (unlike FP16).
+    """
+    if use_amp and device.type == "cuda":
+        return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    return _NullCtx()
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +170,6 @@ def train_one_epoch(
     tokenizer: ECGTokenizer,
     train_loader,
     optimizer: torch.optim.Optimizer,
-    scaler: GradScaler | None,
     mask_fn,
     cfg: PretrainConfig,
     enc_cfg,
@@ -177,7 +182,6 @@ def train_one_epoch(
     predictor.train()
     target_encoder.eval()
 
-    # Set learning rate for this epoch.
     for param_group in optimizer.param_groups:
         param_group["lr"] = lr
 
@@ -188,7 +192,6 @@ def train_one_epoch(
         signal = signal.to(device, non_blocking=True)  # (bs, C, T)
         patches = tokenizer.patchify(signal)  # (bs, C, N, patch_size)
 
-        # Sample mask ratio uniformly in [mask_ratio_min, mask_ratio_max).
         mask_ratio = (
             cfg.mask_ratio_min
             + (cfg.mask_ratio_max - cfg.mask_ratio_min) * torch.rand(1).item()
@@ -201,32 +204,10 @@ def train_one_epoch(
 
         optimizer.zero_grad(set_to_none=True)
 
-        if scaler is not None:
-            with amp_autocast(device.type):
-                ctx_tokens = context_encoder(patches, visible_indices=vis_idx)
-                preds = predictor(ctx_tokens, vis_idx, msk_idx)
-
-                with torch.no_grad():
-                    tgt_all = target_encoder.forward_all(patches)
-                    if cfg.target_layer_norm:
-                        tgt_all = F.layer_norm(tgt_all, (tgt_all.size(-1),))
-                    tgt_all = tgt_all.reshape(
-                        signal.size(0), enc_cfg.num_leads, enc_cfg.num_patches, -1
-                    )
-                    targets = tgt_all.index_select(dim=2, index=msk_idx)
-
-                loss = compute_loss(preds, targets, cfg.loss_type)
-
-            scaler.scale(loss).backward()
-            if cfg.clip_grad > 0:
-                scaler.unscale_(optimizer)
-                nn.utils.clip_grad_norm_(
-                    list(context_encoder.parameters()) + list(predictor.parameters()),
-                    cfg.clip_grad,
-                )
-            scaler.step(optimizer)
-            scaler.update()
-        else:
+        # BF16 autocast: activations are cast to bfloat16 for speed,
+        # but weights and gradients stay in FP32. No GradScaler needed
+        # because BF16 has the same exponent range as FP32.
+        with amp_autocast(device, cfg.use_amp):
             ctx_tokens = context_encoder(patches, visible_indices=vis_idx)
             preds = predictor(ctx_tokens, vis_idx, msk_idx)
 
@@ -240,15 +221,17 @@ def train_one_epoch(
                 targets = tgt_all.index_select(dim=2, index=msk_idx)
 
             loss = compute_loss(preds, targets, cfg.loss_type)
-            loss.backward()
 
-            if cfg.clip_grad > 0:
-                nn.utils.clip_grad_norm_(
-                    list(context_encoder.parameters()) + list(predictor.parameters()),
-                    cfg.clip_grad,
-                )
-            optimizer.step()
+        loss.backward()
 
+        if cfg.clip_grad > 0:
+            nn.utils.clip_grad_norm_(
+                list(context_encoder.parameters()) + list(predictor.parameters()),
+                cfg.clip_grad,
+            )
+        optimizer.step()
+
+        # EMA runs in FP32 on the FP32 weights — outside autocast.
         ema_update(context_encoder, target_encoder, ema_m)
 
         total_loss += loss.item()
@@ -292,18 +275,20 @@ def validate(
             device=device,
         )
 
-        ctx_tokens = context_encoder(patches, visible_indices=vis_idx)
-        preds = predictor(ctx_tokens, vis_idx, msk_idx)
+        with amp_autocast(device, cfg.use_amp):
+            ctx_tokens = context_encoder(patches, visible_indices=vis_idx)
+            preds = predictor(ctx_tokens, vis_idx, msk_idx)
 
-        tgt_all = target_encoder.forward_all(patches)
-        if cfg.target_layer_norm:
-            tgt_all = F.layer_norm(tgt_all, (tgt_all.size(-1),))
-        tgt_all = tgt_all.reshape(
-            signal.size(0), enc_cfg.num_leads, enc_cfg.num_patches, -1
-        )
-        targets = tgt_all.index_select(dim=2, index=msk_idx)
+            tgt_all = target_encoder.forward_all(patches)
+            if cfg.target_layer_norm:
+                tgt_all = F.layer_norm(tgt_all, (tgt_all.size(-1),))
+            tgt_all = tgt_all.reshape(
+                signal.size(0), enc_cfg.num_leads, enc_cfg.num_patches, -1
+            )
+            targets = tgt_all.index_select(dim=2, index=msk_idx)
 
-        loss = compute_loss(preds, targets, cfg.loss_type)
+            loss = compute_loss(preds, targets, cfg.loss_type)
+
         total_loss += loss.item()
         num_batches += 1
 
@@ -320,6 +305,8 @@ def check_collapse(
     target_encoder: ECGEncoder,
     tokenizer: ECGTokenizer,
     signal_batch: torch.Tensor,
+    device: torch.device,
+    use_amp: bool,
 ) -> dict[str, float]:
     """Compute std of target representations to detect collapse.
 
@@ -327,9 +314,9 @@ def check_collapse(
     Healthy training keeps std around 0.5–1.0.
     """
     patches = tokenizer.patchify(signal_batch)
-    tgt_all = target_encoder.forward_all(patches)
-    # Average std over the feature dimension.
-    token_std = tgt_all.std(dim=1).mean().item()
+    with amp_autocast(device, use_amp):
+        tgt_all = target_encoder.forward_all(patches)
+    token_std = tgt_all.float().std(dim=1).mean().item()
     return {"repr_std": token_std}
 
 
@@ -437,7 +424,7 @@ def main() -> None:
     print("=" * 70)
     print(f"  Preset:          {cfg.preset}")
     print(f"  Device:          {device}")
-    print(f"  AMP:             {cfg.use_amp}")
+    print(f"  AMP (BF16):      {cfg.use_amp and device.type == 'cuda'}")
     print(f"  Flash Attention: {cfg.use_flash}")
     print(f"  Mask strategy:   {cfg.mask_strategy}")
     print(f"  Mask ratio:      [{cfg.mask_ratio_min:.2f}, {cfg.mask_ratio_max:.2f})")
@@ -492,10 +479,6 @@ def main() -> None:
         cfg.ema_start, cfg.ema_end, cfg.num_epochs
     )
 
-    if cfg.use_amp and device.type == "cuda":
-        scaler = GradScaler("cuda") if _new_amp else GradScaler()
-    else:
-        scaler = None
     mask_fn = get_mask_fn(cfg.mask_strategy)
 
     start_epoch = 0
@@ -535,7 +518,6 @@ def main() -> None:
             tokenizer=tokenizer,
             train_loader=train_loader,
             optimizer=optimizer,
-            scaler=scaler,
             mask_fn=mask_fn,
             cfg=cfg,
             enc_cfg=enc_cfg,
@@ -559,7 +541,7 @@ def main() -> None:
 
         # Collapse check — use first batch of validation data.
         collapse_signal = next(iter(val_loader)).to(device)
-        collapse_metrics = check_collapse(target_encoder, tokenizer, collapse_signal)
+        collapse_metrics = check_collapse(target_encoder, tokenizer, collapse_signal, device, cfg.use_amp)
 
         elapsed = time.time() - t0
 
