@@ -5,7 +5,7 @@ from dataclasses import dataclass
 class EncoderConfig:
     num_leads: int = 12
     patch_size: int = 50
-    num_patches: int = 50
+    num_patches: int = 20
     embed_dim: int = 384
     depth: int = 6
     num_heads: int = 8

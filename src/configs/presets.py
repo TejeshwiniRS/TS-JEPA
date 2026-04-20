@@ -1,11 +1,14 @@
+from __future__ import annotations
+
 from .tokenizer_config import TokenizerConfig
 from .encoder_config import EncoderConfig
 from .predictor_config import PredictorConfig
 
 
 def dev_preset() -> tuple[TokenizerConfig, EncoderConfig, PredictorConfig]:
-    """Smaller architecture for ablations and debugging (~22M encoder, ~5M predictor)."""
+    """Smaller architecture for ablations and debugging."""
     embed_dim = 384
+    num_patches = 20  # T=1000, patch_size=50 → 20 patches
     tokenizer = TokenizerConfig(
         patch_size=50,
         embed_dim=embed_dim,
@@ -17,7 +20,7 @@ def dev_preset() -> tuple[TokenizerConfig, EncoderConfig, PredictorConfig]:
     encoder = EncoderConfig(
         num_leads=12,
         patch_size=50,
-        num_patches=50,
+        num_patches=num_patches,
         embed_dim=embed_dim,
         depth=6,
         num_heads=8,
@@ -29,7 +32,7 @@ def dev_preset() -> tuple[TokenizerConfig, EncoderConfig, PredictorConfig]:
     )
     predictor = PredictorConfig(
         num_leads=12,
-        num_patches=50,
+        num_patches=num_patches,
         encoder_embed_dim=embed_dim,
         embed_dim=192,
         depth=3,
@@ -45,8 +48,9 @@ def dev_preset() -> tuple[TokenizerConfig, EncoderConfig, PredictorConfig]:
 
 
 def final_preset() -> tuple[TokenizerConfig, EncoderConfig, PredictorConfig]:
-    """Full architecture matching the ECG-JEPA paper (~86M encoder, ~22M predictor)."""
+    """Full architecture for final pretraining runs."""
     embed_dim = 768
+    num_patches = 20  # T=1000, patch_size=50 → 20 patches
     tokenizer = TokenizerConfig(
         patch_size=50,
         embed_dim=embed_dim,
@@ -58,7 +62,7 @@ def final_preset() -> tuple[TokenizerConfig, EncoderConfig, PredictorConfig]:
     encoder = EncoderConfig(
         num_leads=12,
         patch_size=50,
-        num_patches=50,
+        num_patches=num_patches,
         embed_dim=embed_dim,
         depth=12,
         num_heads=16,
@@ -70,7 +74,7 @@ def final_preset() -> tuple[TokenizerConfig, EncoderConfig, PredictorConfig]:
     )
     predictor = PredictorConfig(
         num_leads=12,
-        num_patches=50,
+        num_patches=num_patches,
         encoder_embed_dim=embed_dim,
         embed_dim=384,
         depth=6,

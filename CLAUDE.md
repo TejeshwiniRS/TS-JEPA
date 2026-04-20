@@ -29,13 +29,13 @@ tokenizer = ECGTokenizer(tok_cfg)
 encoder   = ECGEncoder(enc_cfg, tokenizer)
 predictor = ECGPredictor(pred_cfg)
 
-signal  = torch.randn(2, 12, 2500)
+signal  = torch.randn(2, 12, 1000)
 patches = tokenizer.patchify(signal)
-vis = torch.arange(0, 50, 2)
-msk = torch.arange(1, 50, 2)
+vis = torch.arange(0, 20, 2)
+msk = torch.arange(1, 20, 2)
 ctx = encoder(patches, visible_indices=vis)
 pred = predictor(ctx, vis, msk)
-print(ctx.shape, pred.shape)  # [2,300,384]  [2,12,25,384]
+print(ctx.shape, pred.shape)  # [2,120,384]  [2,12,10,384]
 "
 ```
 
