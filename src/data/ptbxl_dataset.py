@@ -36,7 +36,7 @@ class PTBXLDataset(Dataset):
         self,
         data_dir: str,
         split: str = "train",
-        normalize: bool = True,
+        normalize: bool = False,
         return_labels: bool = False,
     ) -> None:
         super().__init__()
@@ -83,8 +83,8 @@ def get_pretrain_loaders(
     num_workers: int = 4,
 ) -> tuple[DataLoader, DataLoader]:
     """Return (train_loader, val_loader) for JEPA pretraining."""
-    train_ds = PTBXLDataset(data_dir=data_dir, split="train", normalize=True)
-    val_ds = PTBXLDataset(data_dir=data_dir, split="val", normalize=True)
+    train_ds = PTBXLDataset(data_dir=data_dir, split="train", normalize=False)
+    val_ds = PTBXLDataset(data_dir=data_dir, split="val", normalize=False)
 
     train_loader = DataLoader(
         train_ds,

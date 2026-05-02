@@ -12,10 +12,7 @@ def dev_preset() -> tuple[TokenizerConfig, EncoderConfig, PredictorConfig]:
     tokenizer = TokenizerConfig(
         patch_size=50,
         embed_dim=embed_dim,
-        conv1_channels=32,
-        conv1_kernel=15,
-        conv2_channels=64,
-        conv2_kernel=9,
+        ffn_hidden_dim=256,
     )
     encoder = EncoderConfig(
         num_leads=12,
@@ -54,10 +51,7 @@ def final_preset() -> tuple[TokenizerConfig, EncoderConfig, PredictorConfig]:
     tokenizer = TokenizerConfig(
         patch_size=50,
         embed_dim=embed_dim,
-        conv1_channels=32,
-        conv1_kernel=15,
-        conv2_channels=64,
-        conv2_kernel=9,
+        ffn_hidden_dim=256,
     )
     encoder = EncoderConfig(
         num_leads=12,

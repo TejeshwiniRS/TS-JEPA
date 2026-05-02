@@ -44,7 +44,7 @@ At inference the context (student) encoder is used alone; its per-patch outputs 
 | `configs/predictor_config.py` | `PredictorConfig` dataclass |
 | `configs/presets.py` | `dev_preset()` and `final_preset()` factory functions returning consistent config triples |
 | `pos_encoding.py` | `get_1d_sincos_pos_embed`, `get_2d_sincos_pos_embed` (non-learnable) |
-| `tokenizer.py` | `ECGTokenizer` — CNN patch tokenizer, also exposes `patchify(signal)` |
+| `tokenizer.py` | `ECGTokenizer` — FFN patch tokenizer, also exposes `patchify(signal)` |
 | `modules/attention.py` | `MultiHeadAttention` with `use_flash` flag |
 | `modules/transformer.py` | `TransformerBlock` (Pre-LN, shared by encoder and predictor) |
 | `encoder.py` | `ECGEncoder` — used as both context and target encoder |
@@ -239,7 +239,7 @@ Flash Attention requires fp16/bf16 tensors; make sure your autocast context is a
 
 - **CroPA.** Add a masked-attention variant in `modules/attention.py` and expose a `use_cropa` flag on `EncoderConfig`. The encoder would need to build the CroPA mask from `(num_leads, num_patches)` and pass it through transformer blocks.
 - **Multi-block masking.** Replace `random_mask_indices` in the training loop with a sampler that picks overlapping consecutive blocks. No model-side changes needed.
-- **Different tokenizers.** `ECGEncoder.__init__` takes any `nn.Module` that exposes `embed_dim`, `patch_size`, and `forward(patches)` with the `(bs, C, N, patch_size)` → `(bs, C, N, D)` contract. Swap in a linear tokenizer or a different CNN as needed.
+- **Different tokenizers.** `ECGEncoder.__init__` takes any `nn.Module` that exposes `embed_dim`, `patch_size`, and `forward(patches)` with the `(bs, C, N, patch_size)` → `(bs, C, N, D)` contract. Swap in a linear tokenizer, deeper FFN, or a CNN as needed.
 - **Variable lead counts.** The transformer itself handles variable sequence lengths. The constraints are (a) positional embeddings are sized for `num_leads` at construction and (b) lead-count changes after training require handling in the pooling and downstream heads.
 
 ---

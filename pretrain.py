@@ -14,6 +14,9 @@ Architecture flow per training step:
     4. Target encoder:  patches → (bs, C×N, D)         [no gradient, EMA]
     5. Loss: L1 between predictor output and target at masked positions
     6. EMA update of target encoder parameters
+    
+    
+    python -u pretrain.py --data_dir /home/aimakeradmin/shady/TS-JEPA/data/mimic --preset final --batch_size 512 --num_epochs 100 --num_workers 12 --save_dir /home/aimakeradmin/shady/TS-JEPA/checkpoints/mimic
 """
 
 from __future__ import annotations
@@ -128,6 +131,25 @@ def compute_loss(
         return ((preds - targets) ** 2).mean()
     else:
         raise ValueError(f"Unknown loss_type '{loss_type}'")
+
+
+def effective_rank(Z: torch.Tensor, eps: float = 1e-8) -> float:
+    """eRank of representation matrix Z ∈ ℝ^{N×D}.
+
+    Returns exp(entropy of normalised eigenvalue spectrum of the covariance).
+    Range: [1, D]. Collapse → 1; fully spread → D.
+    """
+    Z = Z.float()
+    Z = Z - Z.mean(dim=0, keepdim=True)
+    N = Z.size(0)
+    cov = (Z.T @ Z) / max(N - 1, 1)
+    eigvals = torch.linalg.eigvalsh(cov).clamp(min=0)
+    total = eigvals.sum()
+    if total < eps:
+        return 1.0
+    p = eigvals / total
+    H = -(p * (p + eps).log()).sum()
+    return H.exp().item()
 
 
 def save_checkpoint(
@@ -316,8 +338,10 @@ def check_collapse(
     patches = tokenizer.patchify(signal_batch)
     with amp_autocast(device, use_amp):
         tgt_all = target_encoder.forward_all(patches)
-    token_std = tgt_all.float().std(dim=1).mean().item()
-    return {"repr_std": token_std}
+    tgt_float = tgt_all.float()  # (bs, C*N, D)
+    token_std = tgt_float.std(dim=1).mean().item()
+    erank = effective_rank(tgt_float.reshape(-1, tgt_float.size(-1)))
+    return {"repr_std": token_std, "erank": erank}
 
 
 # ---------------------------------------------------------------------------
@@ -331,20 +355,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--signal_length", type=int, default=1000)
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--num_epochs", type=int, default=100)
-    p.add_argument("--lr", type=float, default=1.5e-4)
+    p.add_argument("--lr", type=float, default=1.5e-3)
     p.add_argument("--weight_decay", type=float, default=0.05)
     p.add_argument("--warmup_epochs", type=int, default=10)
     p.add_argument("--min_lr", type=float, default=1e-6)
     p.add_argument("--clip_grad", type=float, default=3.0)
     p.add_argument("--ema_start", type=float, default=0.996)
     p.add_argument("--ema_end", type=float, default=1.0)
-    p.add_argument("--mask_strategy", type=str, default="random", choices=["random", "block"])
+    p.add_argument("--mask_strategy", type=str, default="block", choices=["random", "block"])
     p.add_argument("--mask_ratio_min", type=float, default=0.60)
     p.add_argument("--mask_ratio_max", type=float, default=0.70)
     p.add_argument("--loss_type", type=str, default="l1", choices=["l1", "l2"])
     p.add_argument("--save_dir", type=str, default="checkpoints")
-    p.add_argument("--save_every", type=int, default=20)
-    p.add_argument("--log_every", type=int, default=10)
+    p.add_argument("--save_every", type=int, default=2)
+    p.add_argument("--log_every", type=int, default=1)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--num_workers", type=int, default=4)
@@ -552,6 +576,7 @@ def main() -> None:
                 f"train_loss {train_metrics['train_loss']:.4f} | "
                 f"val_loss {val_metrics['val_loss']:.4f} | "
                 f"repr_std {collapse_metrics['repr_std']:.4f} | "
+                f"erank {collapse_metrics['erank']:.1f} | "
                 f"{elapsed:.1f}s"
             )
 

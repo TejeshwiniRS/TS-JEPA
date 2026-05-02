@@ -40,6 +40,11 @@ class PretrainConfig:
     save_every: int = 20
     save_dir: str = "checkpoints"
 
+    # --- Collapse monitoring ---
+    monitor_erank: bool = True
+    erank_eps: float = 1e-7
+    erank_max_samples: int = 25600
+
     # --- Misc ---
     seed: int = 42
     use_amp: bool = True  # BF16 autocast on activations (weights stay FP32)

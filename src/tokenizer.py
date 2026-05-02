@@ -1,8 +1,8 @@
-"""CNN-based patch tokenizer for ECG signals.
+"""FFN-based patch tokenizer for ECG signals.
 
-Replaces the linear projection used in the original ECG-JEPA with a shallow
-1D CNN. Kernel sizes are chosen to cover physiologically relevant scales at
-250 Hz sampling (kernel=15 → ~60 ms, comparable to QRS width).
+Each raw patch is projected into the token space with a lightweight MLP,
+matching the paper's feed-forward style tokenization instead of a convolutional
+front-end.
 
 The tokenizer is applied independently and identically to every (lead, time)
 patch — cross-lead and cross-time context is the transformer's job.
@@ -23,22 +23,11 @@ class ECGTokenizer(nn.Module):
         self.patch_size = cfg.patch_size
         self.embed_dim = cfg.embed_dim
 
-        self.conv1 = nn.Conv1d(
-            1,
-            cfg.conv1_channels,
-            kernel_size=cfg.conv1_kernel,
-            padding="same",
+        self.ffn = nn.Sequential(
+            nn.Linear(cfg.patch_size, cfg.ffn_hidden_dim),
+            nn.GELU(),
+            nn.Linear(cfg.ffn_hidden_dim, cfg.embed_dim),
         )
-        self.act1 = nn.GELU()
-        self.conv2 = nn.Conv1d(
-            cfg.conv1_channels,
-            cfg.conv2_channels,
-            kernel_size=cfg.conv2_kernel,
-            padding="same",
-        )
-        self.act2 = nn.GELU()
-        self.pool = nn.AdaptiveAvgPool1d(1)
-        self.proj = nn.Linear(cfg.conv2_channels, cfg.embed_dim)
 
     def patchify(self, signal: torch.Tensor) -> torch.Tensor:
         """Split a raw ECG signal into non-overlapping patches.
@@ -72,11 +61,7 @@ class ECGTokenizer(nn.Module):
             raise ValueError(
                 f"Expected patch_size={self.patch_size}, got {p}"
             )
-        # Flatten (bs, C, N) into a single batch axis for the 1D CNN.
-        x = patches.reshape(bs * c * n, 1, p)
-        x = self.act1(self.conv1(x))
-        x = self.act2(self.conv2(x))
-        x = self.pool(x)            # (bs*C*N, conv2_channels, 1)
-        x = x.squeeze(-1)           # (bs*C*N, conv2_channels)
-        x = self.proj(x)            # (bs*C*N, embed_dim)
+        # Flatten (bs, C, N) into a single batch axis for per-patch FFN tokenization.
+        x = patches.reshape(bs * c * n, p)
+        x = self.ffn(x)             # (bs*C*N, embed_dim)
         return x.reshape(bs, c, n, self.embed_dim)

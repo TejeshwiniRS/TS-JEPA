@@ -3,9 +3,9 @@
 Usage (from repo root):
 
     python -m scripts.mimic.build_mimic_npy \
-        --ids_csv /Users/shadyali/TS-JEPA/mimic_ids.csv \
-        --out_dir /Users/shadyali/TS-JEPA/data/mimic \
-        --num_workers 8 \
+        --ids_csv ./mimic_ids.csv \
+        --out_dir ./data/mimic \
+        --num_workers 20 \
         --max_records 500
 
 The script produces, under `--out_dir`:
