@@ -3,8 +3,9 @@ from dataclasses import dataclass
 
 @dataclass
 class PredictorConfig:
-    num_leads: int = 12
-    num_patches: int = 20
+    # Defaults match ECG-JEPA: 8 leads, N = 50 temporal patches.
+    num_leads: int = 8
+    num_patches: int = 50
     encoder_embed_dim: int = 384
     embed_dim: int = 192
     depth: int = 3

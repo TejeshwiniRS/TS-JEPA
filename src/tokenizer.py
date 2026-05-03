@@ -1,8 +1,14 @@
-"""FFN-based patch tokenizer for ECG signals.
+"""Per-patch tokenizer for ECG signals.
 
-Each raw patch is projected into the token space with a lightweight MLP,
-matching the paper's feed-forward style tokenization instead of a convolutional
-front-end.
+Two implementations are exposed via `TokenizerConfig.kind`:
+
+  - ``"linear"`` (default, paper-faithful):
+        a single ``nn.Linear(patch_size -> embed_dim)``. The ECG-JEPA paper
+        describes patches as being projected by "a linear layer" before
+        positional embeddings are added.
+
+  - ``"ffn"`` (opt-in for ablations):
+        ``Linear -> GELU -> Linear`` with `ffn_hidden_dim` in the middle.
 
 The tokenizer is applied independently and identically to every (lead, time)
 patch — cross-lead and cross-time context is the transformer's job.
@@ -22,12 +28,20 @@ class ECGTokenizer(nn.Module):
         self.cfg = cfg
         self.patch_size = cfg.patch_size
         self.embed_dim = cfg.embed_dim
+        self.kind = cfg.kind
 
-        self.ffn = nn.Sequential(
-            nn.Linear(cfg.patch_size, cfg.ffn_hidden_dim),
-            nn.GELU(),
-            nn.Linear(cfg.ffn_hidden_dim, cfg.embed_dim),
-        )
+        if cfg.kind == "linear":
+            self.proj: nn.Module = nn.Linear(cfg.patch_size, cfg.embed_dim)
+        elif cfg.kind == "ffn":
+            self.proj = nn.Sequential(
+                nn.Linear(cfg.patch_size, cfg.ffn_hidden_dim),
+                nn.GELU(),
+                nn.Linear(cfg.ffn_hidden_dim, cfg.embed_dim),
+            )
+        else:
+            raise ValueError(
+                f"TokenizerConfig.kind must be 'linear' or 'ffn', got {cfg.kind!r}"
+            )
 
     def patchify(self, signal: torch.Tensor) -> torch.Tensor:
         """Split a raw ECG signal into non-overlapping patches.
@@ -61,7 +75,7 @@ class ECGTokenizer(nn.Module):
             raise ValueError(
                 f"Expected patch_size={self.patch_size}, got {p}"
             )
-        # Flatten (bs, C, N) into a single batch axis for per-patch FFN tokenization.
+        # Flatten (bs, C, N) into a single batch axis for per-patch projection.
         x = patches.reshape(bs * c * n, p)
-        x = self.ffn(x)             # (bs*C*N, embed_dim)
+        x = self.proj(x)            # (bs*C*N, embed_dim)
         return x.reshape(bs, c, n, self.embed_dim)

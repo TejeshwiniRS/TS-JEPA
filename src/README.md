@@ -1,10 +1,13 @@
 # ECG-JEPA — Core Architecture
 
-This package implements the core architecture of a Joint-Embedding Predictive Architecture (JEPA) for 12-lead ECG, adapted from [Kim, 2026 (arxiv 2410.08559)](https://arxiv.org/abs/2410.08559).
+Core architecture of the Joint-Embedding Predictive Architecture (JEPA) for 12-lead ECG, adapted from [Kim, 2026 (arxiv 2410.08559)](https://arxiv.org/abs/2410.08559) with one deliberate deviation: **full self-attention is used in place of CroPA**.
 
-**Scope of this package:** model architectures only — tokenizer, encoder, predictor, and shared transformer building blocks. The training loop, dataloaders, EMA bookkeeping, loss, and downstream evaluators are **not** included and are the responsibility of the caller.
+**Scope of this package:** model architectures only — tokenizer, encoder, predictor, and shared transformer building blocks. The training loop, dataloaders, EMA bookkeeping, loss, eRank monitoring, and downstream evaluators live in `pretrain.py` and `src/data/`.
 
-See `/Users/shadyali/TS-JEPA/design_backlog.md` for the full design rationale. This README focuses on the interface a training-loop author needs.
+Default geometry (paper-faithful):
+- 8 leads (I, II, V1-V6); the 4 derivable leads dropped via Einthoven's law.
+- 10 s @ 250 Hz -> T = 2500, patch_size = 50, N = 50.
+- Per-patch tokenizer: a single `nn.Linear(50 -> embed_dim)` (`TokenizerConfig.kind="linear"`). `kind="ffn"` is also available for ablations.
 
 ---
 
@@ -39,16 +42,20 @@ At inference the context (student) encoder is used alone; its per-patch outputs 
 
 | File | Purpose |
 | --- | --- |
-| `configs/tokenizer_config.py` | `TokenizerConfig` dataclass |
+| `configs/tokenizer_config.py` | `TokenizerConfig` dataclass (`kind="linear"` / `"ffn"`) |
 | `configs/encoder_config.py` | `EncoderConfig` dataclass |
 | `configs/predictor_config.py` | `PredictorConfig` dataclass |
+| `configs/pretrain_config.py` | `PretrainConfig` dataclass (training-loop hyperparameters) |
 | `configs/presets.py` | `dev_preset()` and `final_preset()` factory functions returning consistent config triples |
 | `pos_encoding.py` | `get_1d_sincos_pos_embed`, `get_2d_sincos_pos_embed` (non-learnable) |
-| `tokenizer.py` | `ECGTokenizer` — FFN patch tokenizer, also exposes `patchify(signal)` |
+| `tokenizer.py` | `ECGTokenizer` — per-patch linear (default) or FFN; also exposes `patchify(signal)` |
 | `modules/attention.py` | `MultiHeadAttention` with `use_flash` flag |
 | `modules/transformer.py` | `TransformerBlock` (Pre-LN, shared by encoder and predictor) |
 | `encoder.py` | `ECGEncoder` — used as both context and target encoder |
 | `predictor.py` | `ECGPredictor` — per-lead masked prediction |
+| `data/pretrain_dataset.py` | `PretrainECGDataset` — mmap raw-signal dataset over Chapman+Ningbo+CODE-15 |
+| `data/ptbxl_dataset.py` | `PTBXLDataset` — downstream (linear probe / fine-tune) only |
+| `masking.py` | `random_mask` / `block_mask` / `multi_block_mask` |
 
 ---
 
@@ -76,14 +83,16 @@ If you hand-assemble configs (not via a preset), you are responsible for these i
 
 ### Dev vs final config
 
+Both presets share the paper geometry (`num_leads=8`, `num_patches=50`); only the transformer width/depth differs.
+
 | | Encoder (dev / final) | Predictor (dev / final) |
 | --- | --- | --- |
 | `embed_dim` | 384 / 768 | 192 / 384 |
 | `depth` | 6 / 12 | 3 / 6 |
 | `num_heads` | 8 / 16 | 6 / 12 |
-| Approx. params | ~22M / ~86M | ~5M / ~22M |
+| Approx. params | ~11M / ~86M | ~3M / ~22M |
 
-Use `dev_preset()` until the training loop is working end-to-end, then swap in `final_preset()` for the actual pretraining run.
+Use `dev_preset()` for CPU smoke tests / ablations; use `final_preset()` for the actual pretraining run.
 
 ---
 
@@ -237,9 +246,8 @@ Flash Attention requires fp16/bf16 tensors; make sure your autocast context is a
 
 ## Extension points
 
-- **CroPA.** Add a masked-attention variant in `modules/attention.py` and expose a `use_cropa` flag on `EncoderConfig`. The encoder would need to build the CroPA mask from `(num_leads, num_patches)` and pass it through transformer blocks.
-- **Multi-block masking.** Replace `random_mask_indices` in the training loop with a sampler that picks overlapping consecutive blocks. No model-side changes needed.
-- **Different tokenizers.** `ECGEncoder.__init__` takes any `nn.Module` that exposes `embed_dim`, `patch_size`, and `forward(patches)` with the `(bs, C, N, patch_size)` → `(bs, C, N, D)` contract. Swap in a linear tokenizer, deeper FFN, or a CNN as needed.
+- **CroPA.** Currently disabled by design. To enable, add a masked-attention variant in `modules/attention.py` and expose a `use_cropa` flag on `EncoderConfig`. The encoder would need to build the CroPA mask from `(num_leads, num_patches)` and pass it through transformer blocks.
+- **Different tokenizers.** `ECGEncoder.__init__` takes any `nn.Module` that exposes `embed_dim`, `patch_size`, and `forward(patches)` with the `(bs, C, N, patch_size)` -> `(bs, C, N, D)` contract. The default is a single per-patch linear projection (paper); pass `TokenizerConfig(kind="ffn")` for the older 2-layer FFN tokenizer.
 - **Variable lead counts.** The transformer itself handles variable sequence lengths. The constraints are (a) positional embeddings are sized for `num_leads` at construction and (b) lead-count changes after training require handling in the pooling and downstream heads.
 
 ---
@@ -264,21 +272,21 @@ encoder   = ECGEncoder(enc_cfg, tokenizer)
 predictor = ECGPredictor(pred_cfg)
 
 bs, C, T = 2, enc_cfg.num_leads, enc_cfg.num_patches * enc_cfg.patch_size
-signal = torch.randn(bs, C, T)
-patches = tokenizer.patchify(signal)                  # (2, 12, 50, 50)
+signal = torch.randn(bs, C, T)                        # (2, 8, 2500)
+patches = tokenizer.patchify(signal)                  # (2, 8, 50, 50)
 
 N = enc_cfg.num_patches
 vis = torch.arange(0, N, 2)                           # Q=25 visible
 msk = torch.arange(1, N, 2)                           # M=25 masked
 
-ctx_tokens = encoder(patches, visible_indices=vis)    # (2, 12*25, 384)
-preds = predictor(ctx_tokens, vis, msk)               # (2, 12, 25, 384)
-all_tokens = encoder.forward_all(patches)             # (2, 12*50, 384)
+ctx_tokens = encoder(patches, visible_indices=vis)    # (2, 8*25, 384)
+preds = predictor(ctx_tokens, vis, msk)               # (2, 8, 25, 384)
+all_tokens = encoder.forward_all(patches)             # (2, 8*50, 384)
 
 print(ctx_tokens.shape, preds.shape, all_tokens.shape)
 ```
 
 Expected output:
 ```
-torch.Size([2, 300, 384]) torch.Size([2, 12, 25, 384]) torch.Size([2, 600, 384])
+torch.Size([2, 200, 384]) torch.Size([2, 8, 25, 384]) torch.Size([2, 400, 384])
 ```

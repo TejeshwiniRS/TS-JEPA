@@ -1,18 +1,18 @@
-"""PTB-XL dataset for JEPA pretraining and downstream evaluation.
+"""PTB-XL dataset (downstream evaluation only).
+
+Pretraining now uses ``PretrainECGDataset`` over the unified
+Chapman + Ningbo + CODE-15 npy arrays. PTB-XL is reserved for downstream
+linear-probe / fine-tuning experiments.
 
 Expected files in `data_dir`:
     X_ecg_train.npy   (17441, 12, 1000)  float32
     X_ecg_val.npy     (2193,  12, 1000)  float32
     X_ecg_test.npy    (2203,  12, 1000)  float32
-    y_ecg_train.npy   (17441, 5)         float32  — multi-label, 5 PTB-XL superclasses
+    y_ecg_train.npy   (17441, 5)         float32  - multi-label, 5 PTB-XL superclasses
     y_ecg_val.npy     (2193,  5)         float32
     y_ecg_test.npy    (2203,  5)         float32
-    norm_ecg_mean.npy (1, 12, 1)         float32  — per-lead normalization mean
-    norm_ecg_std.npy  (1, 12, 1)         float32  — per-lead normalization std
-
-Signals are 12-lead ECG at 100 Hz, 10 seconds → T = 1000.
-The npy arrays are already close to unit-variance; the norm files provide
-exact per-lead statistics for precise standardization.
+    norm_ecg_mean.npy (1, 12, 1)         float32  - per-lead normalization mean
+    norm_ecg_std.npy  (1, 12, 1)         float32  - per-lead normalization std
 """
 
 from __future__ import annotations
@@ -77,29 +77,34 @@ class PTBXLDataset(Dataset):
         return sig
 
 
-def get_pretrain_loaders(
+def get_ptbxl_loaders(
     data_dir: str,
-    batch_size: int = 64,
+    batch_size: int = 32,
     num_workers: int = 4,
-) -> tuple[DataLoader, DataLoader]:
-    """Return (train_loader, val_loader) for JEPA pretraining."""
-    train_ds = PTBXLDataset(data_dir=data_dir, split="train", normalize=False)
-    val_ds = PTBXLDataset(data_dir=data_dir, split="val", normalize=False)
-
+    return_labels: bool = True,
+    normalize: bool = False,
+) -> tuple[DataLoader, DataLoader, DataLoader]:
+    """Return ``(train, val, test)`` PTB-XL loaders for downstream evaluation."""
+    train_ds = PTBXLDataset(
+        data_dir=data_dir, split="train",
+        normalize=normalize, return_labels=return_labels,
+    )
+    val_ds = PTBXLDataset(
+        data_dir=data_dir, split="val",
+        normalize=normalize, return_labels=return_labels,
+    )
+    test_ds = PTBXLDataset(
+        data_dir=data_dir, split="test",
+        normalize=normalize, return_labels=return_labels,
+    )
+    common = dict(num_workers=num_workers, pin_memory=True)
     train_loader = DataLoader(
-        train_ds,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=True,
+        train_ds, batch_size=batch_size, shuffle=True, drop_last=False, **common
     )
     val_loader = DataLoader(
-        val_ds,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=False,
+        val_ds, batch_size=batch_size, shuffle=False, drop_last=False, **common
     )
-    return train_loader, val_loader
+    test_loader = DataLoader(
+        test_ds, batch_size=batch_size, shuffle=False, drop_last=False, **common
+    )
+    return train_loader, val_loader, test_loader

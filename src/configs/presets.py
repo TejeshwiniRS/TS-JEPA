@@ -5,19 +5,30 @@ from .encoder_config import EncoderConfig
 from .predictor_config import PredictorConfig
 
 
+# ECG-JEPA reference setup (Kim 2026, Section 4 + Section 4.3):
+#   8 leads (I, II, V1-V6), 10 s @ 250 Hz -> T = 2500, patch_size = 50, N = 50.
+# Final encoder: 12 layers, 16 heads, D = 768.
+# Final predictor: 6 layers, 12 heads, D = 384 (smaller transformer).
+NUM_LEADS = 8
+NUM_PATCHES = 50  # T=2500, patch_size=50 -> 50 temporal patches.
+
+
 def dev_preset() -> tuple[TokenizerConfig, EncoderConfig, PredictorConfig]:
-    """Smaller architecture for ablations and debugging."""
+    """Smaller architecture for ablations / CPU smoke tests.
+
+    Same input geometry as `final_preset` (8 leads, N=50) so that the data
+    pipeline and masking strategy are identical between dev and final.
+    """
     embed_dim = 384
-    num_patches = 20  # T=1000, patch_size=50 → 20 patches
     tokenizer = TokenizerConfig(
         patch_size=50,
         embed_dim=embed_dim,
-        ffn_hidden_dim=256,
+        kind="linear",
     )
     encoder = EncoderConfig(
-        num_leads=12,
+        num_leads=NUM_LEADS,
         patch_size=50,
-        num_patches=num_patches,
+        num_patches=NUM_PATCHES,
         embed_dim=embed_dim,
         depth=6,
         num_heads=8,
@@ -28,8 +39,8 @@ def dev_preset() -> tuple[TokenizerConfig, EncoderConfig, PredictorConfig]:
         qkv_bias=True,
     )
     predictor = PredictorConfig(
-        num_leads=12,
-        num_patches=num_patches,
+        num_leads=NUM_LEADS,
+        num_patches=NUM_PATCHES,
         encoder_embed_dim=embed_dim,
         embed_dim=192,
         depth=3,
@@ -45,18 +56,17 @@ def dev_preset() -> tuple[TokenizerConfig, EncoderConfig, PredictorConfig]:
 
 
 def final_preset() -> tuple[TokenizerConfig, EncoderConfig, PredictorConfig]:
-    """Full architecture for final pretraining runs."""
+    """Paper-faithful architecture for full pretraining runs."""
     embed_dim = 768
-    num_patches = 20  # T=1000, patch_size=50 → 20 patches
     tokenizer = TokenizerConfig(
         patch_size=50,
         embed_dim=embed_dim,
-        ffn_hidden_dim=256,
+        kind="linear",
     )
     encoder = EncoderConfig(
-        num_leads=12,
+        num_leads=NUM_LEADS,
         patch_size=50,
-        num_patches=num_patches,
+        num_patches=NUM_PATCHES,
         embed_dim=embed_dim,
         depth=12,
         num_heads=16,
@@ -67,8 +77,8 @@ def final_preset() -> tuple[TokenizerConfig, EncoderConfig, PredictorConfig]:
         qkv_bias=True,
     )
     predictor = PredictorConfig(
-        num_leads=12,
-        num_patches=num_patches,
+        num_leads=NUM_LEADS,
+        num_patches=NUM_PATCHES,
         encoder_embed_dim=embed_dim,
         embed_dim=384,
         depth=6,
