@@ -80,6 +80,20 @@ def amp_autocast(device: torch.device, use_amp: bool):
     return _NullCtx()
 
 
+def flash_attn_is_available() -> bool:
+    """Return True if ``flash_attn`` can be imported (GPU kernels present).
+
+    Presets default to ``use_flash=True``, but many clusters do not ship the
+    optional ``flash-attn`` wheel; we fall back to PyTorch SDPA in that case
+    instead of crashing at model construction.
+    """
+    try:
+        import flash_attn  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Schedules
 # ---------------------------------------------------------------------------
@@ -487,6 +501,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--use_amp", action="store_true", default=True)
     p.add_argument("--no_amp", dest="use_amp", action="store_false")
+    p.add_argument(
+        "--no_flash",
+        action="store_true",
+        default=False,
+        help="Force standard PyTorch attention even if flash-attn is installed.",
+    )
     p.add_argument("--resume", type=str, default=None,
                    help="Path to checkpoint to resume from")
     return p
@@ -543,6 +563,18 @@ def main() -> None:
     if device.type == "cpu":
         enc_cfg.use_flash = False
         pred_cfg.use_flash = False
+    elif args.no_flash:
+        enc_cfg.use_flash = False
+        pred_cfg.use_flash = False
+    elif enc_cfg.use_flash or pred_cfg.use_flash:
+        if not flash_attn_is_available():
+            print(
+                "flash-attn is not installed; using PyTorch scaled-dot-product "
+                "attention (slower, higher VRAM). To enable FlashAttention: "
+                "pip install flash-attn --no-build-isolation"
+            )
+            enc_cfg.use_flash = False
+            pred_cfg.use_flash = False
     cfg.use_flash = enc_cfg.use_flash
 
     assert cfg.signal_length % enc_cfg.patch_size == 0, (
