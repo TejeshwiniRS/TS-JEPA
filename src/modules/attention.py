@@ -6,9 +6,13 @@ Two backends are supported, selected by the `use_flash` flag at construction:
   Fast, memory-efficient, but never materializes the attention matrix, so
   attention weights are not available for inspection.
 
-- `use_flash=False`: manual scaled dot-product attention. Slower, but supports
-  `return_attn=True` which returns the full attention-weight tensor so that
-  the caller can analyze attention maps after training.
+- `use_flash=False`: PyTorch scaled dot-product attention. When
+  ``return_attn=False`` (training default), uses
+  :func:`torch.nn.functional.scaled_dot_product_attention`, which fuses the
+  softmax with the matmul on CUDA and does **not** materialize an ``S×S``
+  attention matrix — VRAM is ``O(B·H·S·D)`` instead of ``O(B·H·S²)``. When
+  ``return_attn=True``, falls back to the explicit quadratic path so the full
+  weight tensor can be returned (debug / visualization only; large ``S`` may OOM).
 
 The flag is fixed at construction time — swapping requires rebuilding the module.
 """
@@ -92,19 +96,33 @@ class MultiHeadAttention(nn.Module):
             out = self.proj_drop(out)
             return out
 
-        # Standard scaled-dot-product attention.
         # Rearrange to (bs, num_heads, seq_len, head_dim).
         q, k, v = qkv.permute(2, 0, 3, 1, 4).unbind(dim=0)
+
+        if not return_attn:
+            # Fused SDPA on CUDA (Flash / mem-efficient / math). Avoids
+            # allocating (bs, H, S, S) — critical when flash-attn is not installed.
+            drop_p = self.dropout if self.training else 0.0
+            out = F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=None,
+                dropout_p=drop_p,
+                is_causal=False,
+            )
+            out = out.transpose(1, 2).reshape(bs, seq_len, self.embed_dim)
+            out = self.proj(out)
+            out = self.proj_drop(out)
+            return out
+
+        # Explicit quadratic attention (return_attn=True only).
         attn = (q @ k.transpose(-2, -1)) * self.scale  # (bs, H, S, S)
         attn = F.softmax(attn, dim=-1)
-        attn_weights = attn  # save pre-dropout for returning
+        attn_weights = attn
         attn = self.attn_drop(attn)
-
-        out = attn @ v  # (bs, H, S, head_dim)
+        out = attn @ v
         out = out.transpose(1, 2).reshape(bs, seq_len, self.embed_dim)
         out = self.proj(out)
         out = self.proj_drop(out)
-
-        if return_attn:
-            return out, attn_weights
-        return out
+        return out, attn_weights
