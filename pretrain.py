@@ -42,15 +42,41 @@ import copy
 import csv
 import math
 import os
+import sys
 import time
 import warnings
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _no_cudnn_requested() -> bool:
+    """CLI/env request to avoid libcudnn (see --no_cudnn help)."""
+    if "--no_cudnn" in sys.argv:
+        return True
+    return _env_truthy("TSJEPA_NO_CUDNN")
+
+
+if _no_cudnn_requested():
+    # Read by the native runtime before cuDNN v8 frontend init (clusters with a
+    # broken libcudnn.so vs driver still import torch, then abort on first use).
+    os.environ.setdefault("TORCH_CUDNN_V8_API_DISABLED", "1")
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+if _no_cudnn_requested():
+    torch.backends.cudnn.enabled = False
+    torch.backends.cudnn.benchmark = False
+    for _fn_name in ("enable_cudnn_sdp", "enable_mem_efficient_sdp"):
+        _fn = getattr(torch.backends.cuda, _fn_name, None)
+        if callable(_fn):
+            _fn(False)
 
 from src.configs import dev_preset, final_preset
 from src.configs.pretrain_config import PretrainConfig
@@ -507,6 +533,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Force standard PyTorch attention even if flash-attn is installed.",
     )
+    p.add_argument(
+        "--no_cudnn",
+        action="store_true",
+        default=False,
+        help="Disable cuDNN and SDPA backends that load libcudnn (slower; math "
+             "attention only). Use when libcudnn and the NVIDIA driver / PyTorch "
+             "CUDA build mismatch (native abort: 'Invalid handle. Cannot load "
+             "symbol cudnnGetVersion'). Also sets TORCH_CUDNN_V8_API_DISABLED=1 "
+             "before import. Long-term fix: align CUDA driver, libcudnn "
+             "(e.g. pip nvidia-cudnn-cu*), and LD_LIBRARY_PATH. "
+             "Equivalent: export TSJEPA_NO_CUDNN=1.",
+    )
     p.add_argument("--resume", type=str, default=None,
                    help="Path to checkpoint to resume from")
     return p
@@ -514,6 +552,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+
+    no_cudnn = _no_cudnn_requested()
 
     cfg = PretrainConfig(
         preset=args.preset,
@@ -595,6 +635,7 @@ def main() -> None:
     print(f"  Device:          {device}")
     print(f"  AMP (BF16):      {cfg.use_amp and device.type == 'cuda'}")
     print(f"  Flash Attention: {cfg.use_flash}")
+    print(f"  cuDNN:           {'disabled (--no_cudnn)' if no_cudnn else 'enabled'}")
     print(f"  Tokenizer:       {tok_cfg.kind}")
     print(f"  Mask strategy:   {cfg.mask_strategy}", end="")
     if cfg.mask_strategy == "multi_block":

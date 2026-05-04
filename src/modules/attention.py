@@ -20,10 +20,31 @@ The flag is fixed at construction time — swapping requires rebuilding the modu
 from __future__ import annotations
 
 import math
+from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+def _sdp_ctx_for_scaled_dot_product():
+    """When cuDNN is off, SDPA must not pick backends that dlopen libcudnn."""
+    if torch.backends.cudnn.enabled:
+        return nullcontext()
+    try:
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+
+        return sdpa_kernel([SDPBackend.MATH])
+    except ImportError:
+        pass
+    try:
+        return torch.backends.cuda.sdp_kernel(
+            enable_flash=False,
+            enable_math=True,
+            enable_mem_efficient=False,
+        )
+    except (AttributeError, TypeError):
+        return nullcontext()
 
 
 class MultiHeadAttention(nn.Module):
@@ -103,14 +124,15 @@ class MultiHeadAttention(nn.Module):
             # Fused SDPA on CUDA (Flash / mem-efficient / math). Avoids
             # allocating (bs, H, S, S) — critical when flash-attn is not installed.
             drop_p = self.dropout if self.training else 0.0
-            out = F.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                attn_mask=None,
-                dropout_p=drop_p,
-                is_causal=False,
-            )
+            with _sdp_ctx_for_scaled_dot_product():
+                out = F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    attn_mask=None,
+                    dropout_p=drop_p,
+                    is_causal=False,
+                )
             out = out.transpose(1, 2).reshape(bs, seq_len, self.embed_dim)
             out = self.proj(out)
             out = self.proj_drop(out)
