@@ -44,7 +44,7 @@ print(ctx.shape, pred.shape)  # [2,120,384]  [2,12,10,384]
 See `src/README.md` for the full integration guide (shapes, training-loop pseudo-code, gotchas). Summary:
 
 **Three-component JEPA:**
-- `ECGTokenizer` — 2-layer 1D CNN per patch → D-dim token. Also owns `patchify(signal)`.
+- `ECGTokenizer` — per-patch FFN tokenizer → D-dim token. Also owns `patchify(signal)`.
 - `ECGEncoder` — transformer over C×Q visible tokens (or all C×N for target / inference). 2D sinusoidal pos embed is added *before* masking so dropped tokens retain their true position.
 - `ECGPredictor` — receives context encoder output, reshapes to `(bs×C, Q, D)` to process each lead independently, appends learnable mask tokens, runs transformer, returns predictions at masked positions only as `(bs, C, M, encoder_embed_dim)`.
 

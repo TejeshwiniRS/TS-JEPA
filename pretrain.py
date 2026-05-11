@@ -218,6 +218,7 @@ def measure_collapse(
     device: torch.device,
     use_amp: bool,
     erank_eps: float,
+    probe_batch_size: int,
 ) -> dict[str, float]:
     """Compute eRank + std diagnostics on a fixed batch of signals.
 
@@ -237,14 +238,42 @@ def measure_collapse(
     context_encoder.eval()
     target_encoder.eval()
 
-    sig = sample_signals.to(device, non_blocking=True)
-    patches = tokenizer.patchify(sig)
-    with amp_autocast(device, use_amp):
-        ctx = context_encoder.forward_all(patches).float()  # (bs, C*N, D)
-        tgt = target_encoder.forward_all(patches).float()   # (bs, C*N, D)
+    total = sample_signals.size(0)
+    if total == 0:
+        return {
+            "erank_ctx_token": 1.0,
+            "erank_tgt_token": 1.0,
+            "erank_ctx_pool": 1.0,
+            "std_ctx_token": 0.0,
+            "std_tgt_token": 0.0,
+            "std_ctx_pool": 0.0,
+        }
+
+    if probe_batch_size < 1:
+        raise ValueError(f"probe_batch_size must be >= 1, got {probe_batch_size}")
+    probe_batch_size = min(probe_batch_size, total)
+
+    ctx_chunks: list[torch.Tensor] = []
+    tgt_chunks: list[torch.Tensor] = []
+    ctx_pool_chunks: list[torch.Tensor] = []
+    for start in range(0, total, probe_batch_size):
+        sig = sample_signals[start:start + probe_batch_size].to(
+            device, non_blocking=True
+        )
+        patches = tokenizer.patchify(sig)
+        with amp_autocast(device, use_amp):
+            ctx = context_encoder.forward_all(patches).float()  # (bs, C*N, D)
+            tgt = target_encoder.forward_all(patches).float()  # (bs, C*N, D)
+        ctx_chunks.append(ctx)
+        tgt_chunks.append(tgt)
+        ctx_pool_chunks.append(ctx.mean(dim=1))
+        del sig, patches, ctx, tgt
+
+    ctx = torch.cat(ctx_chunks, dim=0)
+    tgt = torch.cat(tgt_chunks, dim=0)
+    ctx_pool = torch.cat(ctx_pool_chunks, dim=0)  # (bs, D) -- linear-probe input
 
     bs, cn, d = ctx.shape
-    ctx_pool = ctx.mean(dim=1)  # (bs, D) -- the linear-probe input
 
     # Per-token std (averaged over tokens then samples) - cheap collapse alarm.
     ctx_token_std = float(ctx.std(dim=1).mean().item())
@@ -716,9 +745,11 @@ def main() -> None:
 
     # Fix the eRank probe set once so trajectories are comparable across epochs.
     probe_signals = build_collapse_probe_signals(val_loader, cfg.erank_max_samples)
+    probe_batch_size = min(cfg.batch_size, probe_signals.shape[0])
     print(
         f"  Collapse probe:  {probe_signals.shape[0]} samples "
-        f"({probe_signals.shape[1]} leads x {probe_signals.shape[2]} samples each)"
+        f"({probe_signals.shape[1]} leads x {probe_signals.shape[2]} samples each, "
+        f"batch={probe_batch_size})"
     )
 
     metrics_path = Path(cfg.save_dir) / cfg.metrics_csv
@@ -769,6 +800,7 @@ def main() -> None:
             device=device,
             use_amp=cfg.use_amp,
             erank_eps=cfg.erank_eps,
+            probe_batch_size=probe_batch_size,
         )
 
         elapsed = time.time() - t0
