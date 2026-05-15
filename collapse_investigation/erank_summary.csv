@@ -1,0 +1,6 @@
+run,label,max_token_erank,max_token_epoch,max_pooled_erank,max_pooled_epoch,best_val_loss,best_val_epoch,final_token_erank,final_pooled_erank,collapse_alarm_epochs,num_epochs
+final_preset_final,"Final preset, 8 leads, 250 Hz",170.0821,28,83.2517,24,0.223204,3,114.698,57.8779,4,102
+dev_preset_final,"Dev preset, 8 leads, 250 Hz",68.676,28,32.6268,23,0.176137,96,60.0957,27.11,6,100
+dev_100hz,"Dev preset, 8 leads, 100 Hz",25.6684,80,21.4666,0,0.243456,7,25.5066,12.2714,29,100
+dev_12lead,"Dev preset, 12 leads, 250 Hz",70.4657,37,22.9942,32,0.179063,91,50.4839,13.9555,12,100
+dev_100hz_ffn,"Dev preset, FFN tokenizer, 8 leads, 100 Hz",19.1736,99,15.7829,0,0.219924,6,19.1736,7.9109,98,100

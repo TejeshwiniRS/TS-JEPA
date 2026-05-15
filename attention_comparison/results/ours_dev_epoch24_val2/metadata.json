@@ -1,0 +1,46 @@
+{
+  "array_shapes": [
+    [
+      2,
+      8,
+      400,
+      400
+    ],
+    [
+      2,
+      8,
+      400,
+      400
+    ],
+    [
+      2,
+      8,
+      400,
+      400
+    ],
+    [
+      2,
+      8,
+      400,
+      400
+    ],
+    [
+      2,
+      8,
+      400,
+      400
+    ],
+    [
+      2,
+      8,
+      400,
+      400
+    ]
+  ],
+  "average_heads": false,
+  "checkpoint": "checkpoints/dev_preset_final/checkpoint_epoch_24.pt",
+  "input_npy": "data/pretrain/X_pretrain_val.npy",
+  "model": "ours",
+  "num_layers": 6,
+  "preset": "dev"
+}

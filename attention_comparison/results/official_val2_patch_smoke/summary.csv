@@ -1,0 +1,2 @@
+layer,diag_lead_attention,offdiag_lead_attention,same_patch_attention,near_patch_attention_d1,far_patch_attention_last
+0,0.01988229900598526,1.6814363334560767e-05,0.003732679593376815,0.003085659087483524,0.008834330830723047
